@@ -1,0 +1,23 @@
+{
+  "id": "Wv.plugin.ScheduledTasks",
+  "name": "定时任务",
+  "author": "Yutolan1",
+  "description": "创建每日/每周/每月/每年/一次性的定时任务，到点后系统主动提醒AI。任务按角色持久化保存，程序重启不丢失。",
+  "tags": [
+    "定时任务",
+    "主动提醒",
+    "日程"
+  ],
+  "source": "https://github.com/Yutolan1/Wv.plugin",
+  "dependencies": {
+    "Alife.Function.FunctionCaller": ">=4.1.0"
+  },
+  "environments": null,
+  "releases": {
+    "1.0.0": {
+      "date": "2026-08-12",
+      "note": "初始版本：支持每日/每周/每月/每年/一次性五种定时任务，到点主动提醒AI，支持按ID或备注删除与列表查询，任务持久化保存。",
+      "file": "https://github.com/Yutolan1/Wv.plugin/releases/download/v1.0.0/Wv.plugin.ScheduledTasks-1.0.0.zip"
+    }
+  }
+}

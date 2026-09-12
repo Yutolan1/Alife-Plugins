@@ -1,0 +1,25 @@
+{
+  "id": "Wv.plugin.DeskPet",
+  "name": "桌宠交互·增强版",
+  "author": "Yutolan1",
+  "description": "基于官方桌宠交互 4.2.2 的增强版 Live2D 桌宠：互动区域可视化配置（每区域独立开关双击/长按/划动/滚轮并配话术）、原版交互类型开关集中管理、模型 Interaction 交互池可编辑、模型原地切换并注入模型信息。独立插件 id，可与官方桌宠共存。",
+  "tags": [
+    "桌宠",
+    "Live2D",
+    "互动区域",
+    "增强"
+  ],
+  "source": "https://github.com/Yutolan1/Wv.plugin",
+  "dependencies": {
+    "Alife.Function.FunctionCaller": "",
+    "Alife.Function.MessageFilter": ""
+  },
+  "environments": null,
+  "releases": {
+    "4.3.0": {
+      "date": "2026-09-12",
+      "note": "基于官方桌宠交互 4.2.2 的增强分支（独立插件 id，可与官方桌宠共存安装）。\n\nfeat:互动区域可配置——每个区域可单独开关双击/长按/划动/滚轮，并各自配置触发话术；新建区域默认只开双击\nfeat:新增「交互开关」页，集中管理原版 8 种交互（启动反馈/点头部/点身体/连续触摸/旋转/大幅晃动/快速移动/鼠标转圈）\nfeat:新增「模型交互」页，可视化编辑模型 Interaction 交互池（气泡文本+表情+动作），写回 model3.json（自动 .bak 备份）并立即生效\nfeat:复活原版命中区交互（点头部/点身体/连续触摸）\nfeat:功能管理界面改为菜单栏（模型/区域/交互开关/模型交互），缓解页面过长\nfeat:支持模型原地切换（不销毁窗口），切换时告知角色并注入当前模型名与可用表情/动作；角色可主动切换模型\nfeat:表情/动作支持指定持续时长与长时间保持\nfix:移除易与拖拽混淆的自研画圈/甩动识别，避免拖拽被误判为互动\nfix:修复区域设置面板点击穿透、编辑中面板自动退出等问题",
+      "file": "https://github.com/Yutolan1/Wv.plugin/releases/download/v4.3.0/Wv.plugin.DeskPet-4.3.0.zip"
+    }
+  }
+}

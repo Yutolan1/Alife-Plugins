@@ -1,0 +1,4 @@
+# 用户数据不入库
+life_ledger.json
+life_ledger.json.tmp
+*.bak*

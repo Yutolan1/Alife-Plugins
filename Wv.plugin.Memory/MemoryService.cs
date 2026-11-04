@@ -144,6 +144,9 @@ public record MemoryConfig
     // ═══════════ 心绪系统（情绪状态层） ═══════════
     /// <summary>心绪配置：fast 层每轮提取独白（零 LLM），slow 层每 N 轮判读 PAD。null=禁用。</summary>
     public HeartbeatConfig? Heartbeat { get; set; }
+
+    /// <summary>欲望系统：5 驱力 + 疲劳/压力调制，状态机零 LLM。null=禁用。</summary>
+    public DesireConfig? Desire { get; set; }
 }
 
 /// <summary>一种记忆生成任务的独立触发配置。</summary>
@@ -520,6 +523,22 @@ public class MemoryService(
         interactor.Poke(lines.Count == 0
             ? (string.IsNullOrWhiteSpace(name) ? "底色演化历史为空。" : $"没有找到与「{name}」相关的演化记录。")
             : "底色演化（最近→最早）：\n" + string.Join("\n", lines));
+        return Task.CompletedTask;
+    }
+
+    [XmlFunction(FunctionMode.OneShot)]
+    [Description("查看自己此刻的欲望状态：五驱力数值、疲劳/压力、念头池（执念/抑制）。用于自省，不建议在对话里报数值。")]
+    public Task DesireStatus()
+    {
+        interactor.Poke(desireEngine?.StatusText() ?? "欲望系统未启用。");
+        return Task.CompletedTask;
+    }
+
+    [XmlFunction(FunctionMode.OneShot)]
+    [Description("放下一件心里挂着的念头（解决/释怀），从念头池移除。id 用 DesireStatus 里显示的 d 开头 id。")]
+    public Task DesireResolve([Description("念头 id，形如 d1104123456-abcd")] string id)
+    {
+        interactor.Poke(desireEngine?.ResolveThought(id) ?? "欲望系统未启用。");
         return Task.CompletedTask;
     }
 
@@ -2194,6 +2213,8 @@ public class MemoryService(
                             - <{{nameof(CheckMemoryEvidence)}} id="存档id">：核查一条记忆的上下文档位、存档是否存在、原文长度与摘录；记不清或要引用细节时先查，查不到就直说记不清
                             - <{{nameof(ReadTraitHistory)}} name="键名">：查看长期认知/底色的演化历史（旧版→新版），理解自己或哥哥的看法是怎么变的
                             - <{{nameof(RunMemoryEvaluation)}}>：跑一遍 22 条本地记忆评估（召回/证据/攻击/正常），零 LLM；改完记忆系统用它确认没变差
+                            - <{{nameof(DesireStatus)}}>：查看自己此刻的欲望状态（五驱力/疲劳/压力/念头池）——只用于自省，不向哥哥报数值
+                            - <{{nameof(DesireResolve)}} id="d...">：放下一件心里挂着的念头（解决/释怀），id 从 DesireStatus 里拿
                             - Memorize 带 synopsis 时：简述常驻、正文外存，更新正文用同名同时间重新 Memorize 并保持简述不变（保缓存命中）
                             """
         };
@@ -2211,6 +2232,12 @@ public class MemoryService(
         memoryManager = new MemoryManager(compressor, vectorizer, storagePath, Configuration.Threshold,
             Configuration.BatchSize,
             Configuration.MaxCompressionLevel);
+
+        if (Configuration.Desire is { Enable: true } desireCfg)
+        {
+            try { desireEngine = new DesireEngine(storagePath, desireCfg, logger); desireEngine.Load(); }
+            catch (Exception e) { logger.LogWarning(e, "[欲望] 初始化失败，跳过欲望系统"); }
+        }
 
         //加载历史记忆（Awake中常用于插入提示词，故将记忆对话纪录放到Start中）
         ChatBot.EditChatHistory(thread => {
@@ -2262,6 +2289,8 @@ public class MemoryService(
         {
             try { await CheckTriggersAsync(); }
             catch (Exception e) { logger.LogWarning(e, "记忆触发巡检失败"); }
+            try { desireEngine?.Tick(); }
+            catch (Exception e) { logger.LogWarning(e, "[欲望] 结算失败"); }
             await Task.Delay(TimeSpan.FromSeconds(Math.Max(10, Configuration.TriggerPollSeconds)));
         }
     }
@@ -4064,6 +4093,8 @@ public class MemoryService(
                 DateTime tDate = DateTime.TryParse(entry["时间"]?.ToString(), out var td) ? td : now;
                 double recency = Math.Max(0, 1 - Math.Max(0, (now - tDate).TotalDays) / 90.0);
                 double score = topic * 2.5 + emotion * 0.06 + recency * 0.15 + MoodRecallBias(aNow, emotion, cfg.MoodBiasWeight);
+                if (desireEngine != null && Configuration.Desire?.MemoryBiasEnable != false)
+                    score += desireEngine.RecallBias(entry);
                 if (score < cfg.MinScore) continue;
                 ranked.Add((score, entry));
             }
@@ -4144,6 +4175,8 @@ public class MemoryService(
             if (!string.IsNullOrEmpty(se)) parts.Add(se);
             string? task = await ComputeTaskStateTextAsync();
             if (!string.IsNullOrEmpty(task)) parts.Add(task);
+            string? desireText = desireEngine?.BuildInjectionText();
+            if (!string.IsNullOrEmpty(desireText)) parts.Add(desireText);
             var hb = Configuration.Heartbeat;
             if (hb is { Enable: true })
             {
@@ -4188,6 +4221,7 @@ public class MemoryService(
     const string TaskStateMarker = "[当前状态]";
     const string TrailingMarker = "[此刻状态]"; //尾部状态区整条消息的统一头标记（清理逻辑按它识别，含库存行）
     readonly object heartbeatLock = new();
+    DesireEngine? desireEngine;
     int heartbeatSlowBase;
 
     string HeartbeatPath() => ResolveMemoryPath(string.IsNullOrWhiteSpace(Configuration.Heartbeat?.Path) ? "model/心绪.json" : Configuration.Heartbeat!.Path);
@@ -4582,6 +4616,7 @@ public class MemoryService(
         try
         {
             lastHistoryActivity = DateTime.Now;
+            if (content.Role == AuthorRole.User) desireEngine?.OnUserMessage(content.Content ?? "");
             if (Interlocked.Exchange(ref compressing, 1) == 1)
                 return; //已在压缩中，跳过本次留待下轮触发
 

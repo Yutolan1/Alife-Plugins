@@ -147,6 +147,13 @@ public record MemoryConfig
 
     /// <summary>欲望系统：5 驱力 + 疲劳/压力调制，状态机零 LLM。null=禁用。</summary>
     public DesireConfig? Desire { get; set; }
+
+    /// <summary>任务层注入瘦身：每份文档最多保留的维度数（0=不限制）。</summary>
+    public int TaskStateMaxDimsPerDoc { get; set; } = 3;
+    /// <summary>任务层每个维度的字符上限（超出截断）。</summary>
+    public int TaskStateMaxCharsPerDim { get; set; } = 260;
+    /// <summary>任务层整块字符上限（超出截断尾部）。</summary>
+    public int TaskStateMaxTotalChars { get; set; } = 2200;
 }
 
 /// <summary>一种记忆生成任务的独立触发配置。</summary>
@@ -4146,15 +4153,88 @@ public class MemoryService(
             if (string.IsNullOrWhiteSpace(file.Path)) continue;
             string fullPath = ResolveModelPath(file);
             if (!File.Exists(fullPath)) continue;
-            string text = await RenderModelContextTextAsync(fullPath, onlyTier: "会话任务层");
-            if (text.Length == 0) continue;
             string name = Path.GetFileNameWithoutExtension(file.Path);
-            string label = string.Equals(name, "SelfModel", StringComparison.OrdinalIgnoreCase) ? "我眼中的自己·任务层"
-                : string.Equals(name, "UserModel", StringComparison.OrdinalIgnoreCase) ? "我眼中的哥哥·任务层" : name + "·任务层";
-            sb.Append("【").Append(label).AppendLine("】");
+            bool isSelf = string.Equals(name, "SelfModel", StringComparison.OrdinalIgnoreCase);
+            string text = await RenderTaskLayerCompactAsync(fullPath, isSelf);
+            if (text.Length == 0) continue;
+            sb.Append(isSelf ? "我：\n" : "哥哥：\n");
             sb.AppendLine(text);
         }
-        return sb.Length == 0 ? null : TaskStateMarker + "\n" + sb.ToString().TrimEnd();
+        if (sb.Length == 0) return null;
+        string body = sb.ToString().TrimEnd();
+        int cap = Math.Max(400, Configuration.TaskStateMaxTotalChars);
+        if (body.Length > cap) body = body[..cap] + "…";
+        return TaskStateMarker + "\n" + body;
+    }
+
+    static readonly string[] SelfTaskPriority =
+    {
+        "capability_skills", "my_open_threads", "relationship_network", "system_tool_status",
+        "discipline_plan", "knowledge_belief", "recent_calibration", "memory_system_state"
+    };
+    static readonly string[] UserTaskPriority =
+    {
+        "knowledge_belief", "open_threads", "relationship_network", "self_discipline_plan"
+    };
+
+    /// <summary>任务层紧凑渲染：每份文档最多取优先级最高的 N 维，每维截断，去掉标题/元字段。</summary>
+    async Task<string> RenderTaskLayerCompactAsync(string fullPath, bool isSelf)
+    {
+        try
+        {
+            JsonObject? root = JsonSerializer.Deserialize<JsonObject>(await File.ReadAllTextAsync(fullPath));
+            if (root?["分层"]?["会话任务层"] is not JsonObject task) return "";
+            var items = new List<(int Rank, string Name, string Content)>();
+            if (task["维度"] is JsonArray dims)
+            {
+                foreach (JsonNode? node in dims)
+                {
+                    if (node is not JsonObject dim) continue;
+                    string id = dim["标识"]?.ToString() ?? "";
+                    string name = dim["名称"]?.ToString() ?? id;
+                    string content = dim["内容"]?.ToString() ?? dim["备注"]?.ToString() ?? "";
+                    if (content.Length == 0) continue;
+                    items.Add((TaskPriority(isSelf, id, name), name, content));
+                }
+            }
+            else
+            {
+                foreach (var kv in task)
+                {
+                    if (kv.Key is "最后更新" or "更新者" or "名称" or "频次" or "可容忍过期" or "维度") continue;
+                    if (kv.Value is JsonObject or JsonArray) continue;
+                    string content = kv.Value?.ToString() ?? "";
+                    if (content.Length == 0) continue;
+                    items.Add((TaskPriority(isSelf, kv.Key, kv.Key), kv.Key, content));
+                }
+            }
+            int maxDims = Configuration.TaskStateMaxDimsPerDoc <= 0 ? items.Count : Configuration.TaskStateMaxDimsPerDoc;
+            int maxChars = Math.Max(60, Configuration.TaskStateMaxCharsPerDim);
+            var sb = new StringBuilder();
+            foreach (var item in items.OrderBy(x => x.Rank).Take(maxDims))
+            {
+                string content = item.Content.Replace("\r", " ").Replace("\n", " ").Trim();
+                int cap = maxChars;
+                if (item.Name.Contains("话头", StringComparison.Ordinal) || item.Name.Contains("未获回应", StringComparison.Ordinal))
+                    cap = Math.Max(maxChars, 420);
+                else if (item.Name.Contains("能力", StringComparison.Ordinal) || item.Name.Contains("工具", StringComparison.Ordinal))
+                    cap = Math.Max(maxChars, 320);
+                if (content.Length > cap) content = content[..cap] + "…";
+                sb.Append("- ").Append(item.Name).Append('：').AppendLine(content);
+            }
+            return sb.ToString().TrimEnd();
+        }
+        catch (Exception e) { logger.LogWarning(e, "任务层紧凑渲染失败：{Path}", fullPath); return ""; }
+    }
+
+    static int TaskPriority(bool isSelf, string id, string name)
+    {
+        string[] list = isSelf ? SelfTaskPriority : UserTaskPriority;
+        for (int i = 0; i < list.Length; i++)
+            if (string.Equals(list[i], id, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(list[i], name, StringComparison.OrdinalIgnoreCase))
+                return i;
+        return 100;
     }
 
     /// <summary>

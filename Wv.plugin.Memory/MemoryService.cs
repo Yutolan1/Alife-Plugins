@@ -4274,8 +4274,24 @@ public class MemoryService(
                     RemoveTrailingBlocks(h); // 无内容也要清掉旧块
                     return;
                 }
-                if (h.Count > 0 && h[^1].Role == AuthorRole.System && h[^1].Content == blockText)
-                    return; // 已是最新且在末尾：整体跳过
+                // 同内容尾块保持原位：每次 remove+append 会把尾块从对话中段挪到末尾，请求前缀随之改变，
+                // 供应商的前缀缓存会整段失效（实测小上下文每轮 cached=0）。
+                int sameIndex = -1;
+                for (int i = 0; i < h.Count; i++)
+                {
+                    if (h[i].Role != AuthorRole.System || h[i].Content == null) continue;
+                    if (!h[i].Content!.StartsWith(TrailingMarker, StringComparison.Ordinal)) continue;
+                    if (h[i].Content == blockText) sameIndex = i;
+                }
+                if (sameIndex >= 0)
+                {
+                    // 顺手清掉历史遗留的重复尾块，只保留同内容那一块
+                    for (int i = h.Count - 1; i >= 0; i--)
+                        if (i != sameIndex && h[i].Role == AuthorRole.System && h[i].Content != null
+                            && h[i].Content!.StartsWith(TrailingMarker, StringComparison.Ordinal))
+                            h.RemoveAt(i);
+                    return;
+                }
                 RemoveTrailingBlocks(h);
                 h.Add(new ChatMessageContent(AuthorRole.System, blockText));
             }, "注入尾部状态区");
